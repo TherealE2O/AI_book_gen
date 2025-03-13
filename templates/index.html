@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Book Generator</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1434482954535789"
+     crossorigin="anonymous"></script>
+</head>
+<body>
+    <h1>AI Book Generator</h1>
+    <div class="container">
+        {% if current_user.is_authenticated %}
+            <!-- Modify the welcome message to include credits -->
+<p>Welcome, {{ current_user.name }}! Credits: {{ credit_balance }} <a href="{{ url_for('logout') }}">Logout</a></p>
+            <form id="bookForm">
+                <label for="title">Book Title:</label>
+                <input type="text" id="title" name="title" required>
+                <button type="submit">Generate Book</button>
+            </form>
+            <div id="progress"></div>
+            <div id="downloadLink" style="display: none;">
+                <a href="/download_book">Download Book</a>
+            </div>
+            <button id="addCredit">Add 10 Credits with Paystack</button>
+        {% else %}
+            <p><a href="{{ url_for('login') }}">Login</a> or <a href="{{ url_for('register') }}">Register</a> to start generating books.</p>
+        {% endif %}
+    </div>
+
+    <script>
+        const form = document.getElementById('bookForm');
+        const progressDiv = document.getElementById('progress');
+        const downloadLink = document.getElementById('downloadLink');
+        const addCreditButton = document.getElementById('addCredit');
+
+        if (form) {
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const title = document.getElementById('title').value;
+
+                // Start book generation
+                const response = await fetch('/generate_book', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ title }),
+                });
+
+                if (response.ok) {
+                    // Listen for progress updates
+                    const eventSource = new EventSource('/progress');
+                    eventSource.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        progressDiv.innerHTML = `Status: ${data.status}<br>Progress: ${data.percentage}%<br>Message: ${data.message}`;
+
+                        if (data.status === 'completed') {
+                            eventSource.close();
+                            downloadLink.style.display = 'block';
+                        } else if (data.status === 'error') {
+                            eventSource.close();
+                            progressDiv.innerHTML += `<br>Error: ${data.message}`;
+                        }
+                    };
+                } else {
+                    progressDiv.innerHTML = 'Failed to start book generation.';
+                }
+            });
+        }
+
+        if (addCreditButton) {
+            addCreditButton.addEventListener('click', async () => {
+                // Initialize Paystack payment
+                const response = await fetch('/initiate_payment', {
+                    method: 'POST',
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status === 'success') {
+                        // Redirect to Paystack payment page
+                        window.location.href = data.authorization_url;
+                    } else {
+                        alert('Failed to initialize payment.');
+                    }
+                } else {
+                    alert('Failed to initialize payment.');
+                }
+            });
+        }
+    </script>
+</body>
+</html>
