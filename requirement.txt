@@ -1,11 +1,11 @@
 flask
 
-flask-Login
+flask-login
 
 werkzeug
 
 
-pypaystack
+requests
 
 
 Pillow
@@ -13,12 +13,11 @@ Pillow
 
 google-generativeai
 
-rep
-
-ortlab
+reportlab
 
 
 google-api-core
 
 
 tqdm
+
