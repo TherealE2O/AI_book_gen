@@ -8,18 +8,16 @@ import json
 import os
 import time
 import threading
-from pypaystack import Transaction 
-import uuid 
-
+import uuid
+import requests  # Import the requests library
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-app.config['PAYSTACK_SECRET_KEY'] = 'sk_test_8796b1633b5cce9209c63d5159cb2a0321d10d0d'  # Replace with your actual secret key
-
-transaction_handler = Transaction(authorization_key=app.config['PAYSTACK_SECRET_KEY'])
+# Replace with your actual secret key
+app.config['PAYSTACK_SECRET_KEY'] = 'sk_test_8796b1633b5cce9209c63d5159cb2a0321d10d0d'
 
 db.init_app(app)
 login_manager = LoginManager()
@@ -43,8 +41,8 @@ def update_progress(status, percentage, message):
     progress["percentage"] = percentage
     progress["message"] = message
 
-
-
+# Dictionary to store payment references per user
+payment_references = {}
 
 @app.route('/initiate_payment', methods=['POST'])
 @login_required
@@ -52,30 +50,39 @@ def initiate_payment():
     user = current_user
     amount = 200000  # ₦2000 in kobo
     
+    # Generate a unique reference
     reference = f"payment-{uuid.uuid4().hex[:10]}"
     
+    # Store the reference for later verification
     user_id = str(user.id)
     if user_id not in payment_references:
         payment_references[user_id] = []
     payment_references[user_id].append(reference)
     
-    # Initialize transaction without callback_url
-    response = transaction_handler.initialize(
-        email=user.email,
-        amount=amount,
-        reference=reference
-    )
+    # Construct the request to Paystack's initialize transaction endpoint
+    url = "https://api.paystack.co/transaction/initialize"
+    headers = {
+        "Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "email": user.email,
+        "amount": str(amount),
+        "reference": reference  # Optional, but useful for tracking
+    }
     
-    if response[0] == 200:
-        authorization_url = response[3]['authorization_url']
+    response = requests.post(url, headers=headers, json=data)
+    res_json = response.json()
+    
+    if response.status_code == 200 and res_json.get("status") is True:
+        authorization_url = res_json["data"]["authorization_url"]
         return jsonify({"status": "success", "authorization_url": authorization_url})
     else:
-        return jsonify({"status": "error", "message": "Failed to initialize payment"}), 400
-        
-        
-payment_references = {}
-
-
+        return jsonify({
+            "status": "error",
+            "message": "Failed to initialize payment",
+            "details": res_json.get("message")
+        }), 400
 
 @app.route('/verify_payment')
 @login_required
@@ -84,15 +91,23 @@ def verify_payment():
     reference = request.args.get('reference')
     user_id = str(current_user.id)
     
-    # Verify the reference exists in the user's payment references
+    # Check if the reference exists for this user
     if user_id not in payment_references or reference not in payment_references[user_id]:
         return jsonify({"status": "error", "message": "Invalid reference"}), 400
     
-    # Verify the payment with Paystack
-    response = transaction_handler.verify(reference)
+    # Construct the request to Paystack's verify transaction endpoint
+    url = f"https://api.paystack.co/transaction/verify/{reference}"
+    headers = {
+        "Authorization": f"Bearer {app.config['PAYSTACK_SECRET_KEY']}"
+    }
     
-    if response[0] == 200 and response[3]['status'] == 'success':
-        # Payment verified successfully
+    response = requests.get(url, headers=headers)
+    res_json = response.json()
+    
+    if (response.status_code == 200 and 
+        res_json.get("status") is True and 
+        res_json["data"].get("status") == "success"):
+        # Payment verified successfully; update credit
         user = current_user
         credit = Credit.query.filter_by(user_id=user.id).first()
         if not credit:
@@ -102,17 +117,16 @@ def verify_payment():
         db.session.add(credit)
         db.session.commit()
         
-        # Remove the reference from the user's payment references
+        # Remove the reference from the user's list
         payment_references[user_id].remove(reference)
         
         return redirect(url_for('index'))
     else:
-        return jsonify({"status": "error", "message": "Payment verification failed"}), 400
-
-
-
-
-
+        return jsonify({
+            "status": "error",
+            "message": "Payment verification failed",
+            "details": res_json.get("message")
+        }), 400
 
 def generate_book_async(book_title):
     """Background function to generate the book and update progress."""
@@ -180,7 +194,6 @@ def index():
             credit_balance = credit.amount
     return render_template('index.html', credit_balance=credit_balance)
     
-    
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -205,14 +218,12 @@ def register():
         name = request.form['name']
         email = request.form['email']
         password = request.form['password']
-        hashed_password = generate_password_hash(password)  # Use default method
+        hashed_password = generate_password_hash(password)
         new_user = User(name=name, email=email, password=hashed_password)
         db.session.add(new_user)
         db.session.commit()
         return redirect(url_for('login'))
     return render_template('register.html')
-
-
 
 @app.route('/generate_book', methods=['POST'])
 @login_required
@@ -250,7 +261,7 @@ def get_progress():
             yield f"data: {json.dumps(progress)}\n\n"
             if progress["status"] in ["completed", "error"]:
                 break
-            time.sleep(1)  # Update every second
+            time.sleep(1)
     return Response(stream_with_context(generate()), content_type='text/event-stream')
 
 @app.route('/download_book')
@@ -265,4 +276,4 @@ def download_book():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    app.run(debug=True,ssl_context="adhoc")
