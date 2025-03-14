@@ -6,37 +6,47 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 import re
 import json
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+# Register custom fonts
+pdfmetrics.registerFont(TTFont('Georgia', 'Georgia.ttf'))
+pdfmetrics.registerFont(TTFont('EBGaramond', 'EBGaramond-Regular.ttf'))
+
+# Create a global stylesheet and update it with custom fonts
+styles = getSampleStyleSheet()
+styles["Heading1"].fontName = "Georgia"         # Chapter titles in Georgia
+styles["BodyText"].fontName = "EBGaramond"          # Normal text in EB Garamond
+styles["Heading2"].fontName = "EBGaramond"          # Subheadings in EB Garamond
+styles["Heading3"].fontName = "EBGaramond"          # Additional subheadings in EB Garamond
+
+# Custom style for bullet points
+styles.add(ParagraphStyle(
+    name="BodyTextBullet",
+    parent=styles["BodyText"],
+    firstLineIndent=0,
+    spaceBefore=6,
+    leftIndent=20,
+    bulletIndent=0
+))
 
 def generate_pdf(final_book_data, output_pdf="final_workbook1.pdf"):
+    # Use the global stylesheet with customizations
     doc = SimpleDocTemplate(output_pdf, pagesize=letter)
-    styles = getSampleStyleSheet()
-
-    # Custom style for bullet points
-    styles.add(ParagraphStyle(
-        name="BodyTextBullet",
-        parent=styles["BodyText"],
-        firstLineIndent=0,
-        spaceBefore=6,
-        leftIndent=20,
-        bulletIndent=0
-    ))
-
     Story = []
 
-    # Process book title (if your JSON already has a title, this can be plain text)
+    # Process book title
     Story.append(Paragraph(final_book_data["title"], styles["Title"]))
     Story.append(Spacer(1, 24))
 
     # Process chapters
     for chapter in final_book_data["chapters"]:
-        # Chapter header
         chapter_header = f"Chapter {chapter['chapterNumber']}: {chapter['chapterTitle']}"
         Story.append(Paragraph(chapter_header, styles["Heading1"]))
         Story.append(Spacer(1, 16))
 
         # Process sections
         for section in chapter.get("sections", []):
-            # Section header
             Story.append(Paragraph(section["sectionTitle"], styles["Heading2"]))
             Story.append(Spacer(1, 8))
 
@@ -52,8 +62,7 @@ def generate_pdf(final_book_data, output_pdf="final_workbook1.pdf"):
 
 def process_markdown_content(content, styles):
     """
-    Processes content that may have explicit markers like "Title:", "Heading 1:" or "> Paragraph:".
-    These markers are stripped out so that the final rendered text does not include them.
+    Processes content with explicit markers such as "Title:" and "Heading 1:".
     """
     flowables = []
     lines = content.split('\n')
@@ -66,7 +75,7 @@ def process_markdown_content(content, styles):
     for line in lines:
         line = line.rstrip()  # Remove trailing whitespace
 
-        # Check for explicit markers and process them first:
+        # Check for explicit markers
         if line.startswith("Title:"):
             text = line[len("Title:"):].strip()
             flowables.append(Paragraph(text, styles["Title"]))
@@ -105,14 +114,12 @@ def process_markdown_content(content, styles):
             previous_line_type = 'table_caption'
             continue
 
-        # Next, handle markdown headings using '#' if present.
+        # Handle markdown headings using '#' if present.
         heading_match = re.match(r'^(#+)\s+(.*)', line)
         if heading_match:
             heading_level = len(heading_match.group(1))
             heading_text = heading_match.group(2).strip()
-            # Strip out explicit markers if present
             heading_text = re.sub(r'^(Title:|Heading\s*\d+:)\s*', '', heading_text)
-            # Map heading levels: '#' → Heading1, '##' → Heading2, etc.
             if heading_level == 1:
                 style = styles["Heading1"]
             elif heading_level == 2:
@@ -126,7 +133,7 @@ def process_markdown_content(content, styles):
             previous_line_type = 'heading'
             continue
 
-        # Handle table rows (detecting a vertical bar)
+        # Handle table rows (lines with vertical bars)
         if '|' in line:
             if not in_table:
                 if current_list:
@@ -136,9 +143,7 @@ def process_markdown_content(content, styles):
                 table_data = []
                 header_separator = False
 
-            # Process table row by splitting on '|'
             row = [cell.strip() for cell in line.split('|') if cell.strip()]
-            # Check for a header separator (commonly a row with dashes)
             if re.match(r'^\s*-+\s*$', line.replace('|', '').strip()):
                 header_separator = True
                 continue
@@ -146,7 +151,6 @@ def process_markdown_content(content, styles):
             previous_line_type = 'table_row'
             continue
         elif in_table:
-            # Finalize and add table when non-table line is encountered
             if table_data:
                 flowables.append(create_table(table_data))
             in_table = False
@@ -154,7 +158,7 @@ def process_markdown_content(content, styles):
             header_separator = False
             previous_line_type = 'table'
 
-        # Handle bullet list items (lines starting with "*")
+        # Handle bullet list items
         if re.match(r'^\s*\*', line):
             if in_table:
                 if table_data:
@@ -162,7 +166,6 @@ def process_markdown_content(content, styles):
                 in_table = False
                 table_data = []
                 header_separator = False
-            # Remove the bullet marker and trim
             bullet_text = re.sub(r'^\s*\*\s*', '', line).strip()
             bullet_text = format_markdown(bullet_text)
             current_list.append(
@@ -178,10 +181,8 @@ def process_markdown_content(content, styles):
                 flowables.append(ListFlowable(current_list, bulletType='bullet'))
                 current_list = []
 
-            # Process any remaining non-empty lines as regular paragraphs
             if line.strip():
                 formatted_text = format_markdown(line.strip())
-                # If the line is short, you might choose to treat it as a heading
                 if (previous_line_type not in ['list_item', 'table_row', 'heading', 'paragraph'] or not previous_line_type) and len(line.split()) <= 10:
                     flowables.append(Paragraph(formatted_text, styles.get("Heading3", styles["BodyText"])))
                     flowables.append(Spacer(1, 4))
@@ -193,7 +194,6 @@ def process_markdown_content(content, styles):
             else:
                 previous_line_type = 'space'
 
-    # Flush any remaining list items or table data.
     if current_list:
         flowables.append(ListFlowable(current_list, bulletType='bullet'))
     if in_table and table_data:
@@ -202,11 +202,8 @@ def process_markdown_content(content, styles):
     return flowables
 
 def format_markdown(text):
-    # Remove any residual markers if needed (this can be expanded)
     text = re.sub(r'^(Title:|Heading\s*\d+:|> Paragraph:)\s*', '', text)
-    # Convert **bold** to <strong>
     text = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
-    # Convert *italic* to <em>
     text = re.sub(r'\*(.*?)\*', r'<em>\1</em>', text)
     return text
 
@@ -232,7 +229,6 @@ def load_json_data(filepath):
     return data
 
 if __name__ == '__main__':
-    # Example usage:
     json_file_path = "final_workbook.json"  # Replace with your actual file path
     try:
         book_data = load_json_data(json_file_path)
