@@ -1,3 +1,6 @@
+flask_sqlalchemy
+
+
 flask
 
 flask-login
